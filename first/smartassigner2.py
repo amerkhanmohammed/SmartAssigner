@@ -19,9 +19,9 @@ import numpy as np
 # ----------------------------
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-JIRA_BASE_URL = "https://ca-il-jira-test.il.cyber-ark.com"
-BEARER_TOKEN =   "aWTqpMSa8F67iyFonBF6ln6FvNXua4JmQiVKOk"
-SPRINT_ID =  "34108"
+JIRA_BASE_URL = "https://ca-il-jira.il.cyber-ark.com:8443"
+BEARER_TOKEN = "xGkGLtKttyM5Gnr57XLyPYMg2k1RwpnTyBiR8P"
+SPRINT_ID = "36339"
 
 # ----------------------------
 # Your State
@@ -38,9 +38,8 @@ model = SentenceTransformer('all-MiniLM-L6-v2')
 # ----------------------------
 def fetch_open_issues(_: State) -> List[Dict[str, Any]]:
     JQL_QUERY = (
-        'project = "Cross RND Ticket" AND type = Ticket  AND component = Identity-Integrations ' 
-    'And status = "In Progress" and (assignee is EMPTY or assignee = "Ratan sharma") '
-    'ORDER BY Severity'
+        'project = "Cross RND Ticket" AND type = Ticket '
+        'AND component = Identity-Integrations AND status = "Investigating" '
     )
     API_ENDPOINT = f"{JIRA_BASE_URL}/rest/api/2/search"
     params = {
@@ -61,7 +60,6 @@ def fetch_open_issues(_: State) -> List[Dict[str, Any]]:
             title = fields.get("customfield_19321", {}).get("value", "No Title")
             desc = fields.get("summary", "No Description")
             issues.append({"key": key, "title": title, "description": desc})
-    print(issues)
     return issues
 
 # ----------------------------
@@ -84,6 +82,52 @@ def fetch_sprint_developers(_: State) -> Dict[str, int]:
             developer_points[name] = developer_points.get(name, 0) + sp
     return developer_points
 
+
+# ---------------------------
+# Method : Build FAISS index
+# ---------------------------
+def build_index(history):
+    """
+    history: list of dicts with keys -> ticket_id, desc, developer
+    returns: (faiss_index, history) for later retrieval
+    """
+    descriptions = [h["desc"] for h in history]
+    embeddings = model.encode(descriptions, convert_to_numpy=True)
+
+    # Normalize for cosine similarity
+    faiss.normalize_L2(embeddings)
+
+    d = embeddings.shape[1]  # embedding dimension (384 for MiniLM)
+    index = faiss.IndexFlatIP(d)  # cosine similarity
+    index.add(embeddings)
+
+    return index, history
+
+
+# ---------------------------
+# Method : Search FAISS index
+# ---------------------------
+def search_index(index, history, query, k=7):
+    """
+    query: string (ticket description)
+    k: number of nearest neighbors
+    returns: list of matching tickets with similarity
+    """
+    query_emb = model.encode([query], convert_to_numpy=True)
+    faiss.normalize_L2(query_emb)
+
+    D, I = index.search(query_emb, k)
+    results = []
+    for rank, idx in enumerate(I[0]):
+        ticket = history[idx]
+        results.append({
+            "rank": rank + 1,
+            "ticket_id": ticket["ticket_id"],
+            "desc": ticket["desc"],
+            "developer": ticket["developer"],
+            "similarity": float(D[0][rank])
+        })
+    return results
 # ----------------------------
 # Tool 3: LLM Assignment
 # ----------------------------

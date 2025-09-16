@@ -4,4 +4,6 @@ langchain-core
 langchain-community
 python-dotenv
 langchain-openai
+faiss
+sentence-transformers
 
