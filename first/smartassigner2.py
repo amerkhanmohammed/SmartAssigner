@@ -7,7 +7,6 @@ from typing import Dict, Any, List, Tuple
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolNode
 from typing import TypedDict
 from IPython.display import Image, display
 from sentence_transformers import SentenceTransformer
@@ -29,10 +28,13 @@ SPRINT_ID = "36339"
 class State(TypedDict):
     issues: List[Dict[str, Any]]
     developers: Dict[str, int]
+    history: List[Dict[str, Any]]
+    index: Any
+    search_results: Dict[str, List[Dict[str, Any]]]
     assignments: List[Tuple[str, str]]
 
-
 model = SentenceTransformer('all-MiniLM-L6-v2')
+
 # ----------------------------
 # Tool 1: Fetch Open Issues
 # ----------------------------
@@ -82,61 +84,75 @@ def fetch_sprint_developers(_: State) -> Dict[str, int]:
             developer_points[name] = developer_points.get(name, 0) + sp
     return developer_points
 
+# ----------------------------
+# Tool 3: Fetch Dummy History
+# ----------------------------
+def fetch_history(_: State) -> List[Dict[str, Any]]:
+    # Dummy history: in real-world, pull from DB or logs
+    return [
+        {"ticket_id": "CRT-1001", "desc": "Login issue in SAML integration", "developer": "alice"},
+        {"ticket_id": "CRT-1002", "desc": "Database performance bug", "developer": "bob"},
+        {"ticket_id": "CRT-1003", "desc": "Error in Identity sync API", "developer": "carol"},
+        {"ticket_id": "CRT-1004", "desc": "UI crash on reset password", "developer": "alice"},
+    ]
 
-# ---------------------------
-# Method : Build FAISS index
-# ---------------------------
-def build_index(history):
-    """
-    history: list of dicts with keys -> ticket_id, desc, developer
-    returns: (faiss_index, history) for later retrieval
-    """
+# ----------------------------
+# Tool 4: Build FAISS index
+# ----------------------------
+def build_index(history: List[Dict[str, Any]]):
     descriptions = [h["desc"] for h in history]
     embeddings = model.encode(descriptions, convert_to_numpy=True)
-
-    # Normalize for cosine similarity
     faiss.normalize_L2(embeddings)
-
-    d = embeddings.shape[1]  # embedding dimension (384 for MiniLM)
-    index = faiss.IndexFlatIP(d)  # cosine similarity
+    d = embeddings.shape[1]
+    index = faiss.IndexFlatIP(d)
     index.add(embeddings)
+    return index
 
-    return index, history
-
-
-# ---------------------------
-# Method : Search FAISS index
-# ---------------------------
-def search_index(index, history, query, k=7):
-    """
-    query: string (ticket description)
-    k: number of nearest neighbors
-    returns: list of matching tickets with similarity
-    """
-    query_emb = model.encode([query], convert_to_numpy=True)
-    faiss.normalize_L2(query_emb)
-
-    D, I = index.search(query_emb, k)
-    results = []
-    for rank, idx in enumerate(I[0]):
-        ticket = history[idx]
-        results.append({
-            "rank": rank + 1,
-            "ticket_id": ticket["ticket_id"],
-            "desc": ticket["desc"],
-            "developer": ticket["developer"],
-            "similarity": float(D[0][rank])
-        })
-    return results
 # ----------------------------
-# Tool 3: LLM Assignment
+# Tool 5: Search FAISS index
+# ----------------------------
+def search_index(state: State) -> Dict[str, List[Dict[str, Any]]]:
+    index = state["index"]
+    history = state["history"]
+    issues = state["issues"]
+
+    search_results: Dict[str, List[Dict[str, Any]]] = {}
+
+    for issue in issues:
+        query_emb = model.encode([issue["description"]], convert_to_numpy=True)
+        faiss.normalize_L2(query_emb)
+        D, I = index.search(query_emb, k=3)
+        results = []
+        for rank, idx in enumerate(I[0]):
+            ticket = history[idx]
+            results.append({
+                "rank": rank + 1,
+                "ticket_id": ticket["ticket_id"],
+                "desc": ticket["desc"],
+                "developer": ticket["developer"],
+                "similarity": float(D[0][rank])
+            })
+        search_results[issue["key"]] = results
+
+    return search_results
+
+# ----------------------------
+# Tool 6: LLM Assignment
 # ----------------------------
 def llm_assign(state: State) -> List[Tuple[str, str]]:
     developers = state["developers"]
     issues = state["issues"]
+    search_results = state["search_results"]
 
     state_prompt = "".join(f"Developer: {d}, Points: {p}\n" for d, p in developers.items())
-    issue_prompt = "".join(f"{i['key']}: {i['title']} | {i['description']}\n" for i in issues)
+    issue_prompt = ""
+    for i in issues:
+        sims = search_results.get(i["key"], [])
+        sim_text = "".join(
+            f"(Similar: {s['ticket_id']} solved by {s['developer']} | {s['desc']} | score {s['similarity']:.2f})\n"
+            for s in sims
+        )
+        issue_prompt += f"{i['key']}: {i['title']} | {i['description']}\n{sim_text}\n"
 
     llm = ChatOpenAI(
         openai_api_key=OPENAI_API_KEY,
@@ -146,20 +162,21 @@ def llm_assign(state: State) -> List[Tuple[str, str]]:
 
     prompt = (
         state_prompt + issue_prompt +
-        "Assign each CRT number to the developer with the time remaining.if all equal assign randomly\n"
+        "Assign each CRT number to the developer considering load and historical similarity.\n"
         "Format strictly:\nCRT-xxxx: developer_name"
     )
+
     resp = llm.invoke(prompt)
     resp_text = resp.content.strip()
     assignments = []
     for line in resp_text.splitlines():
-        m = re.match(r"^(CRT-\\d+):\\s+([\\w\\d_-]+)$", line.strip())
+        m = re.match(r"^(CRT-\d+):\s+([\w\d_-]+)$", line.strip())
         if m:
             assignments.append((m.group(1), m.group(2)))
     return assignments
 
 # ----------------------------
-# Tool 4: Assign JIRA Issue
+# Tool 7: Assign JIRA Issue
 # ----------------------------
 def assign_jira_issue(assignments: List[Tuple[str, str]]) -> None:
     for crt, dev in assignments:
@@ -179,12 +196,18 @@ graph = StateGraph(State)
 
 graph.add_node("fetch_open_issues", lambda s: {"issues": fetch_open_issues(s)})
 graph.add_node("fetch_sprint_developers", lambda s: {"developers": fetch_sprint_developers(s)})
+graph.add_node("fetch_history", lambda s: {"history": fetch_history(s)})
+graph.add_node("build_index", lambda s: {"index": build_index(s["history"])})
+graph.add_node("search_index", lambda s: {"search_results": search_index(s)})
 graph.add_node("llm_assign", lambda s: {"assignments": llm_assign(s)})
 graph.add_node("assign_jira_issue", lambda s: assign_jira_issue(s["assignments"]) or {})
 
 graph.set_entry_point("fetch_open_issues")
 graph.add_edge("fetch_open_issues", "fetch_sprint_developers")
-graph.add_edge("fetch_sprint_developers", "llm_assign")
+graph.add_edge("fetch_sprint_developers", "fetch_history")
+graph.add_edge("fetch_history", "build_index")
+graph.add_edge("build_index", "search_index")
+graph.add_edge("search_index", "llm_assign")
 graph.add_edge("llm_assign", "assign_jira_issue")
 graph.add_edge("assign_jira_issue", END)
 
