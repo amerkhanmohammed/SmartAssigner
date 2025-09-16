@@ -19,7 +19,7 @@ import numpy as np
 # ----------------------------
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-JIRA_BASE_URL = "https://ca-il-jira.il.cyber-ark.com:8443"
+JIRA_BASE_URL = "https://ca-il-jira-test.il.cyber-ark.com"
 BEARER_TOKEN = "xGkGLtKttyM5Gnr57XLyPYMg2k1RwpnTyBiR8P"
 SPRINT_ID = "36339"
 
@@ -146,7 +146,7 @@ def llm_assign(state: State) -> List[Tuple[str, str]]:
 
     prompt = (
         state_prompt + issue_prompt +
-        "Assign each CRT number to the developer with the fewest story points.\n"
+        "Assign each CRT number to the developer with the time remaining.if all equal assign randomly\n"
         "Format strictly:\nCRT-xxxx: developer_name"
     )
     resp = llm.invoke(prompt)

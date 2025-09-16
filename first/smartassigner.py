@@ -80,7 +80,7 @@ def fetch_sprint_developers(_: State) -> Dict[str, int]:
                 continue
             assignee = fields.get("assignee", {}) or {}
             name = assignee.get("name", "Unassigned")
-            sp = fields.get("customfield_11820", 0) or 0
+            sp = fields.get("aggregatetimeestimate", 0) or 0
             developer_points[name] = developer_points.get(name, 0) + sp
     return developer_points
 
@@ -91,7 +91,7 @@ def llm_assign(state: State) -> List[Tuple[str, str]]:
     developers = state["developers"]
     issues = state["issues"]
 
-    state_prompt = "".join(f"Developer: {d}, Points: {p}\n" for d, p in developers.items())
+    state_prompt = "".join(f"Developer: {d}, TimeRemaining: {p}\n" for d, p in developers.items())
     issue_prompt = "".join(f"{i['key']}: {i['title']} | {i['description']}\n" for i in issues)
 
     llm = ChatOpenAI(
@@ -101,17 +101,26 @@ def llm_assign(state: State) -> List[Tuple[str, str]]:
     )
 
     prompt = (
-        state_prompt + issue_prompt +
-        "Assign each CRT number to the developer with the fewest story points.\n"
-        "Format strictly:\nCRT-xxxx: developer_name"
+            state_prompt + issue_prompt +
+            "Assign each CRT number to a developer.\n"
+            "- Prefer developers with more available time, but do not assign everything to just one developer.\n"
+            "- Distribute the issues fairly so that workload is balanced.\n"
+            "- If multiple developers have similar availability, assign randomly to keep distribution even.\n"
+            "- No developer should get more than ~60% of the total CRTs if others still have time remaining.\n"
+            "Format strictly:\nCRT-xxxx: developer_name"
     )
     resp = llm.invoke(prompt)
+
     resp_text = resp.content.strip()
+    print("this is response " + resp_text)
     assignments = []
     for line in resp_text.splitlines():
-        m = re.match(r"^(CRT-\\d+):\\s+([\\w\\d_-]+)$", line.strip())
+        m = re.match(r"^(CRT-\d+):\s+([\w\d_-]+)$", line.strip())
+
         if m:
             assignments.append((m.group(1), m.group(2)))
+    print("Amer has assignements " + str(assignments))
+
     return assignments
 
 # ----------------------------
