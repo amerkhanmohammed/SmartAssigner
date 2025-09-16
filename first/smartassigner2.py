@@ -40,8 +40,9 @@ model = SentenceTransformer('all-MiniLM-L6-v2')
 # ----------------------------
 def fetch_open_issues(_: State) -> List[Dict[str, Any]]:
     JQL_QUERY = (
-        'project = "Cross RND Ticket" AND type = Ticket '
-        'AND component = Identity-Integrations AND status = "Investigating" '
+        'project = "Cross RND Ticket" AND type = Ticket  AND component = Identity-Integrations '
+        'And status = "In Progress" and (assignee is EMPTY or assignee = "Ratan sharma") '
+        'ORDER BY Severity'
     )
     API_ENDPOINT = f"{JIRA_BASE_URL}/rest/api/2/search"
     params = {
