@@ -20,7 +20,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 JIRA_BASE_URL = "https://ca-il-jira-test.il.cyber-ark.com"
 BEARER_TOKEN = "xGkGLtKttyM5Gnr57XLyPYMg2k1RwpnTyBiR8P"
-SPRINT_ID = "36339"
+SPRINT_ID = "34108"
 
 # ----------------------------
 # Your State
@@ -62,6 +62,7 @@ def fetch_open_issues(_: State) -> List[Dict[str, Any]]:
             title = fields.get("customfield_19321", {}).get("value", "No Title")
             desc = fields.get("summary", "No Description")
             issues.append({"key": key, "title": title, "description": desc})
+    print(issues)
     return issues
 
 # ----------------------------
@@ -80,8 +81,9 @@ def fetch_sprint_developers(_: State) -> Dict[str, int]:
                 continue
             assignee = fields.get("assignee", {}) or {}
             name = assignee.get("name", "Unassigned")
-            sp = fields.get("customfield_11820", 0) or 0
+            sp = fields.get("aggregatetimeestimate", 0) or 0
             developer_points[name] = developer_points.get(name, 0) + sp
+
     return developer_points
 
 # ----------------------------
