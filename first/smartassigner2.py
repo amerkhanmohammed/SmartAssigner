@@ -71,6 +71,7 @@ def fetch_open_issues(_: State) -> List[Dict[str, Any]]:
 # Tool 2: Fetch Sprint Developers
 # ----------------------------
 def fetch_sprint_developers(_: State) -> Dict[str, int]:
+    print("started fetch_sprint_developers")
     url = f"{JIRA_BASE_URL}/rest/agile/1.0/sprint/{SPRINT_ID}/issue"
     headers = {"Authorization": f"Bearer {BEARER_TOKEN}", "Accept": "application/json"}
     resp = requests.get(url, headers=headers)
@@ -85,13 +86,14 @@ def fetch_sprint_developers(_: State) -> Dict[str, int]:
             name = assignee.get("name", "Unassigned")
             sp = fields.get("aggregatetimeestimate", 0) or 0
             developer_points[name] = developer_points.get(name, 0) + sp
-
+    print("completed fetch_sprint_developers")
     return developer_points
 
 # ----------------------------
 # Tool 3: Fetch History from JIRA
 # ----------------------------
 def fetch_history(_: State) -> List[Dict[str, Any]]:
+    print("started fetch_history")
     JQL_QUERY = (
         'project = "Cross RND Ticket" AND type = Ticket '
         'AND status in ("11018", "10019") '
@@ -129,25 +131,28 @@ def fetch_history(_: State) -> List[Dict[str, Any]]:
             })
     else:
         print("Failed to fetch history:", resp.status_code, resp.text)
-
+    print("Completed fetch_history")
     return history
 
 # ----------------------------
 # Tool 4: Build FAISS index
 # ----------------------------
 def build_index(history: List[Dict[str, Any]]):
+    print("started build_index")
     descriptions = [h["desc"] for h in history]
     embeddings = model.encode(descriptions, convert_to_numpy=True)
     faiss.normalize_L2(embeddings)
     d = embeddings.shape[1]
     index = faiss.IndexFlatIP(d)
     index.add(embeddings)
+    print("completed build_index")
     return index
 
 # ----------------------------
 # Tool 5: Search FAISS index
 # ----------------------------
 def search_index(state: State) -> Dict[str, List[Dict[str, Any]]]:
+    print("started search_index")
     index = state["index"]
     history = state["history"]
     issues = state["issues"]
@@ -169,13 +174,14 @@ def search_index(state: State) -> Dict[str, List[Dict[str, Any]]]:
                 "similarity": float(D[0][rank])
             })
         search_results[issue["key"]] = results
-
+    print("completed search_index")
     return search_results
 
 # ----------------------------
 # Tool 6: LLM Assignment
 # ----------------------------
 def llm_assign(state: State) -> List[Tuple[str, str]]:
+    print("started llm_assign")
     developers = state["developers"]
     issues = state["issues"]
     search_results = state.get("search_results", {})
@@ -217,6 +223,7 @@ def llm_assign(state: State) -> List[Tuple[str, str]]:
         m = re.match(r"^(CRT-\d+):\s+([\w\d_-]+)$", line.strip())
         if m:
             assignments.append((m.group(1), m.group(2)))
+    print("completed llm_assign")
     return assignments
 
 
@@ -224,6 +231,7 @@ def llm_assign(state: State) -> List[Tuple[str, str]]:
 # Tool 7: Assign JIRA Issue
 # ----------------------------
 def assign_jira_issue(assignments: List[Tuple[str, str]]) -> None:
+    print("started assign_jira_issue")
     for crt, dev in assignments:
         url = f"{JIRA_BASE_URL}/rest/api/2/issue/{crt}/assignee"
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {BEARER_TOKEN}"}
@@ -233,6 +241,7 @@ def assign_jira_issue(assignments: List[Tuple[str, str]]) -> None:
             print(f"Assigned {crt} -> {dev}")
         else:
             print(f"Failed {crt}: {r.status_code} {r.text}")
+        print("completed assign_jira_issue")
 
 # ----------------------------
 # Build LangGraph
