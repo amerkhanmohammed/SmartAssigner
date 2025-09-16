@@ -39,6 +39,7 @@ model = SentenceTransformer('all-MiniLM-L6-v2')
 # Tool 1: Fetch Open Issues
 # ----------------------------
 def fetch_open_issues(_: State) -> List[Dict[str, Any]]:
+    print("started fetch_open_issues")
     JQL_QUERY = (
         'project = "Cross RND Ticket" AND type = Ticket  AND component = Identity-Integrations '
         'And status = "In Progress" and (assignee is EMPTY or assignee = "Ratan sharma") '
@@ -63,7 +64,7 @@ def fetch_open_issues(_: State) -> List[Dict[str, Any]]:
             title = fields.get("customfield_19321", {}).get("value", "No Title")
             desc = fields.get("summary", "No Description")
             issues.append({"key": key, "title": title, "description": desc})
-    print(issues)
+    print("completed fetch_open_issues")
     return issues
 
 # ----------------------------
@@ -88,16 +89,48 @@ def fetch_sprint_developers(_: State) -> Dict[str, int]:
     return developer_points
 
 # ----------------------------
-# Tool 3: Fetch Dummy History
+# Tool 3: Fetch History from JIRA
 # ----------------------------
 def fetch_history(_: State) -> List[Dict[str, Any]]:
-    # Dummy history: in real-world, pull from DB or logs
-    return [
-        {"ticket_id": "CRT-1001", "desc": "Login issue in Pcloud integration", "developer": "saichalla"},
-        {"ticket_id": "CRT-1002", "desc": "failed to suspend", "developer": "saichalla"},
-        {"ticket_id": "CRT-1003", "desc": "Error in Identity sync API", "developer": "vkini"},
-        {"ticket_id": "CRT-1004", "desc": "UI crash on reset password", "developer": "saichalla"},
-    ]
+    JQL_QUERY = (
+        'project = "Cross RND Ticket" AND type = Ticket '
+        'AND status in ("11018", "10019") '
+        'AND NOT (updated <= -1w OR statusCategory != Done) '
+        'ORDER BY Severity'
+    )
+
+    API_ENDPOINT = f"{JIRA_BASE_URL}/rest/api/2/search"
+    params = {
+        "jql": JQL_QUERY,
+        "fields": "summary,description,assignee",
+        "maxResults": 50
+    }
+    headers = {
+        "Authorization": f"Bearer {BEARER_TOKEN}",
+        "Accept": "application/json"
+    }
+
+    resp = requests.get(API_ENDPOINT, headers=headers, params=params)
+    history: List[Dict[str, Any]] = []
+
+    if resp.status_code == 200:
+        data = resp.json()
+        for issue in data.get("issues", []):
+            key = issue.get("key")
+            fields = issue.get("fields", {})
+            desc = fields.get("summary", "No Description")
+            assignee = fields.get("assignee") or {}
+            developer = assignee.get("name", "Unknown")
+
+            history.append({
+                "ticket_id": key,
+                "desc": desc,
+                "developer": developer
+            })
+    else:
+        print("Failed to fetch history:", resp.status_code, resp.text)
+
+    return history
 
 # ----------------------------
 # Tool 4: Build FAISS index
@@ -145,15 +178,15 @@ def search_index(state: State) -> Dict[str, List[Dict[str, Any]]]:
 def llm_assign(state: State) -> List[Tuple[str, str]]:
     developers = state["developers"]
     issues = state["issues"]
-    search_results = state.get("search_results", [])
+    search_results = state.get("search_results", {})
 
     state_prompt = "".join(f"Developer: {d}, Points: {p}\n" for d, p in developers.items())
     issue_prompt = "".join(f"{i['key']}: {i['title']} | {i['description']}\n" for i in issues)
 
     history_prompt = ""
-    for i, res in enumerate(search_results, 1):
-        history_prompt += f"\nSimilar Past Ticket {i}:\n"
-        for r in res:
+    for issue_key, res_list in search_results.items():
+        history_prompt += f"\nSimilar Past Tickets for {issue_key}:\n"
+        for r in res_list:
             history_prompt += (
                 f"  Ticket: {r['ticket_id']}, Dev: {r['developer']}, "
                 f"Similarity: {r['similarity']:.2f}, Desc: {r['desc']}\n"
@@ -173,7 +206,7 @@ def llm_assign(state: State) -> List[Tuple[str, str]]:
         "- Prefer developers with more available time, but do not assign everything to just one developer.\n"
         "- Distribute the issues fairly so that workload is balanced.\n"
         "- If multiple developers have similar availability, assign randomly to keep distribution even.\n"
-        "- No developer should get more than ~60% of the total CRTs if others still have time remaining.\n"
+        "- No developer should get more than ~60% of the total CRTs if others still have time remaining. and consider history similarity like which developer worked on which story\n"
         "Format strictly:\nCRT-xxxx: developer_name"
     )
 
@@ -185,6 +218,7 @@ def llm_assign(state: State) -> List[Tuple[str, str]]:
         if m:
             assignments.append((m.group(1), m.group(2)))
     return assignments
+
 
 # ----------------------------
 # Tool 7: Assign JIRA Issue
