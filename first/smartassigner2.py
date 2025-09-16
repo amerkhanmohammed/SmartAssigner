@@ -19,7 +19,7 @@ import numpy as np
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 JIRA_BASE_URL = "https://ca-il-jira-test.il.cyber-ark.com"
-BEARER_TOKEN = "xGkGLtKttyM5Gnr57XLyPYMg2k1RwpnTyBiR8P"
+BEARER_TOKEN = "aWTqpMSa8F67iyFonBF6ln6FvNXua4JmQiVKOk"
 SPRINT_ID = "34108"
 
 # ----------------------------
@@ -92,10 +92,10 @@ def fetch_sprint_developers(_: State) -> Dict[str, int]:
 def fetch_history(_: State) -> List[Dict[str, Any]]:
     # Dummy history: in real-world, pull from DB or logs
     return [
-        {"ticket_id": "CRT-1001", "desc": "Login issue in SAML integration", "developer": "alice"},
-        {"ticket_id": "CRT-1002", "desc": "Database performance bug", "developer": "bob"},
-        {"ticket_id": "CRT-1003", "desc": "Error in Identity sync API", "developer": "carol"},
-        {"ticket_id": "CRT-1004", "desc": "UI crash on reset password", "developer": "alice"},
+        {"ticket_id": "CRT-1001", "desc": "Login issue in Pcloud integration", "developer": "saichalla"},
+        {"ticket_id": "CRT-1002", "desc": "failed to suspend", "developer": "saichalla"},
+        {"ticket_id": "CRT-1003", "desc": "Error in Identity sync API", "developer": "vkini"},
+        {"ticket_id": "CRT-1004", "desc": "UI crash on reset password", "developer": "saichalla"},
     ]
 
 # ----------------------------
@@ -144,17 +144,19 @@ def search_index(state: State) -> Dict[str, List[Dict[str, Any]]]:
 def llm_assign(state: State) -> List[Tuple[str, str]]:
     developers = state["developers"]
     issues = state["issues"]
-    search_results = state["search_results"]
+    search_results = state.get("search_results", [])
 
     state_prompt = "".join(f"Developer: {d}, Points: {p}\n" for d, p in developers.items())
-    issue_prompt = ""
-    for i in issues:
-        sims = search_results.get(i["key"], [])
-        sim_text = "".join(
-            f"(Similar: {s['ticket_id']} solved by {s['developer']} | {s['desc']} | score {s['similarity']:.2f})\n"
-            for s in sims
-        )
-        issue_prompt += f"{i['key']}: {i['title']} | {i['description']}\n{sim_text}\n"
+    issue_prompt = "".join(f"{i['key']}: {i['title']} | {i['description']}\n" for i in issues)
+
+    history_prompt = ""
+    for i, res in enumerate(search_results, 1):
+        history_prompt += f"\nSimilar Past Ticket {i}:\n"
+        for r in res:
+            history_prompt += (
+                f"  Ticket: {r['ticket_id']}, Dev: {r['developer']}, "
+                f"Similarity: {r['similarity']:.2f}, Desc: {r['desc']}\n"
+            )
 
     llm = ChatOpenAI(
         openai_api_key=OPENAI_API_KEY,
@@ -163,8 +165,14 @@ def llm_assign(state: State) -> List[Tuple[str, str]]:
     )
 
     prompt = (
-        state_prompt + issue_prompt +
-        "Assign each CRT number to the developer considering load and historical similarity.\n"
+        state_prompt + "\n" +
+        issue_prompt + "\n" +
+        history_prompt + "\n" +
+        "Assign each CRT number to a developer.\n"
+        "- Prefer developers with more available time, but do not assign everything to just one developer.\n"
+        "- Distribute the issues fairly so that workload is balanced.\n"
+        "- If multiple developers have similar availability, assign randomly to keep distribution even.\n"
+        "- No developer should get more than ~60% of the total CRTs if others still have time remaining.\n"
         "Format strictly:\nCRT-xxxx: developer_name"
     )
 
@@ -214,7 +222,7 @@ graph.add_edge("llm_assign", "assign_jira_issue")
 graph.add_edge("assign_jira_issue", END)
 
 app = graph.compile()
-display(Image(app.get_graph().draw_mermaid_png()))
+'''display(Image(app.get_graph().draw_mermaid_png()))'''
 
 if __name__ == "__main__":
     final_state = app.invoke({})
