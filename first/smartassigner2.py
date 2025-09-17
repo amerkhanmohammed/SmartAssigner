@@ -37,7 +37,7 @@ model = SentenceTransformer('all-MiniLM-L6-v2')
 # Tool 1: Fetch Open Issues
 # ----------------------------
 def fetch_open_issues(_: State) -> List[Dict[str, Any]]:
-    print("started fetch_open_issues")
+    print("📥Fetching open issues from the Jira board...")
     JQL_QUERY = (
         'project = "Cross RND Ticket" AND type = Ticket  AND component = Identity-Integrations '
         'And status = "In Progress" and (assignee is EMPTY or assignee = "Ratan sharma") '
@@ -62,14 +62,14 @@ def fetch_open_issues(_: State) -> List[Dict[str, Any]]:
             title = fields.get("customfield_19321", {}).get("value", "No Title")
             desc = fields.get("summary", "No Description")
             issues.append({"key": key, "title": title, "description": desc})
-    print("completed fetch_open_issues")
+    print(f"✅ Fetched issues: {len(issues)}")
     return issues
 
 # ----------------------------
 # Tool 2: Fetch Sprint Developers
 # ----------------------------
 def fetch_sprint_developers(_: State) -> Dict[str, int]:
-    print("started fetch_sprint_developers")
+    print("📥Fetching developers available in the SPRINT...")
     url = f"{JIRA_BASE_URL}/rest/agile/1.0/sprint/{SPRINT_ID}/issue"
     headers = {"Authorization": f"Bearer {BEARER_TOKEN}", "Accept": "application/json"}
     resp = requests.get(url, headers=headers)
@@ -84,14 +84,14 @@ def fetch_sprint_developers(_: State) -> Dict[str, int]:
             name = assignee.get("name", "Unassigned")
             sp = fields.get("aggregatetimeestimate", 0) or 0
             developer_points[name] = developer_points.get(name, 0) + sp
-    print("completed fetch_sprint_developers")
+    print(f"✅ Fetched developers: {', '.join(developer_points.keys())}")
     return developer_points
 
 # ----------------------------
 # Tool 3: Fetch History from JIRA
 # ----------------------------
 def fetch_history(_: State) -> List[Dict[str, Any]]:
-    print("started fetch_history")
+    print("📥 Fetching historical data from the JIRA board...")
 
     JQL_QUERY = (
         'project = "Cross RND Ticket" AND type = Ticket '
@@ -130,28 +130,27 @@ def fetch_history(_: State) -> List[Dict[str, Any]]:
             })
     else:
         print("Failed to fetch history:", resp.status_code, resp.text)
-    print("Completed fetch_history")
+    print("✅ Completed fetching history.")
     return history
 
 # ----------------------------
 # Tool 4: Build FAISS index
 # ----------------------------
 def build_index(history: List[Dict[str, Any]]):
-    print("started build_index")
+    print("🔄 Creating index using historical data...")
     descriptions = [h["desc"] for h in history]
     embeddings = model.encode(descriptions, convert_to_numpy=True)
     faiss.normalize_L2(embeddings)
     d = embeddings.shape[1]
     index = faiss.IndexFlatIP(d)
     index.add(embeddings)
-    print("completed build_index")
     return index
 
 # ----------------------------
 # Tool 5: Search FAISS index
 # ----------------------------
 def search_index(state: State) -> Dict[str, List[Dict[str, Any]]]:
-    print("started search_index")
+    print("🔄 Creating embedding based on index...")
     index = state["index"]
     history = state["history"]
     issues = state["issues"]
@@ -173,14 +172,13 @@ def search_index(state: State) -> Dict[str, List[Dict[str, Any]]]:
                 "similarity": float(D[0][rank])
             })
         search_results[issue["key"]] = results
-    print("completed search_index")
     return search_results
 
 # ----------------------------
 # Tool 6: LLM Assignment
 # ----------------------------
 def llm_assign(state: State) -> List[Tuple[str, str]]:
-    print("started llm_assign")
+    print("⏳ The AI Agent is working on your task... please wait a moment....")
     developers = state["developers"]
     issues = state["issues"]
     search_results = state.get("search_results", {})
@@ -222,7 +220,6 @@ def llm_assign(state: State) -> List[Tuple[str, str]]:
         m = re.match(r"^(CRT-\d+):\s+([\w\d_-]+)$", line.strip())
         if m:
             assignments.append((m.group(1), m.group(2)))
-    print("completed llm_assign")
     return assignments
 
 
@@ -230,23 +227,32 @@ def llm_assign(state: State) -> List[Tuple[str, str]]:
 # Tool 7: Assign JIRA Issue
 # ----------------------------
 def assign_jira_issue(assignments: List[Tuple[str, str]]) -> None:
-    print("started assign_jira_issue")
+    print("🔄 Started assigning open issues to developers...")
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_assignments = []
     for crt, dev in assignments:
+        if (crt, dev) not in seen:
+            unique_assignments.append((crt, dev))
+            seen.add((crt, dev))
+
+    for crt, dev in unique_assignments:
         url = f"{JIRA_BASE_URL}/rest/api/2/issue/{crt}/assignee"
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {BEARER_TOKEN}"}
         payload = {"name": dev}
         r = requests.put(url, headers=headers, data=json.dumps(payload))
         if r.status_code == 204:
-            print(f"Assigned {crt} -> {dev}")
+            print(f"✅ Assigned {crt} -> {dev}")
         else:
             print(f"Failed {crt}: {r.status_code} {r.text}")
-        print("completed assign_jira_issue")
+
+    print("✅✅✅ Completed assigning developers to open issues.")
 
 # ----------------------------
 # Tool 8: Add comments with similar tickets
 # ----------------------------
 def comment_similar_tickets(state: State) -> None:
-    print("started comment_similar_tickets")
     search_results = state.get("search_results", {})
 
     for crt, results in search_results.items():
@@ -270,12 +276,11 @@ def comment_similar_tickets(state: State) -> None:
         payload = {"body": comment_body}
         r = requests.post(url, headers=headers, data=json.dumps(payload))
 
-        if r.status_code == 201:
-            print(f"Added comment to {crt}")
-        else:
-            print(f"Failed to add comment for {crt}: {r.status_code} {r.text}")
+        # if r.status_code == 201:
+        #     print(f"Added comment to {crt}")
+        # else:
+        #     print(f"Failed to add comment for {crt}: {r.status_code} {r.text}")
 
-    print("completed comment_similar_tickets")
     return {}
 
 # ----------------------------
@@ -308,6 +313,6 @@ graph.add_edge("assign_jira_issue", END)
 app = graph.compile()
 '''display(Image(app.get_graph().draw_mermaid_png()))'''
 
-if __name__ == "__main__":
-    final_state = app.invoke({})
-    print("Pipeline finished:", final_state)
+# if __name__ == "__main__":
+#     final_state = app.invoke({})
+#     print("Pipeline finished:", final_state)
