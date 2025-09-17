@@ -94,11 +94,12 @@ def fetch_sprint_developers(_: State) -> Dict[str, int]:
 # ----------------------------
 def fetch_history(_: State) -> List[Dict[str, Any]]:
     print("started fetch_history")
+
     JQL_QUERY = (
         'project = "Cross RND Ticket" AND type = Ticket '
-        'AND status in ("11018", "10019") '
-        'AND NOT (updated <= -1w OR statusCategory != Done) '
-        'ORDER BY Severity'
+        'AND statusCategory = Done '
+        'AND component = "Identity-Integrations" '
+        'AND resolved >= -1w'
     )
 
     API_ENDPOINT = f"{JIRA_BASE_URL}/rest/api/2/search"
@@ -244,6 +245,42 @@ def assign_jira_issue(assignments: List[Tuple[str, str]]) -> None:
         print("completed assign_jira_issue")
 
 # ----------------------------
+# Tool 8: Add comments with similar tickets
+# ----------------------------
+def comment_similar_tickets(state: State) -> None:
+    print("started comment_similar_tickets")
+    search_results = state.get("search_results", {})
+
+    for crt, results in search_results.items():
+        if not results:
+            continue
+
+        # Build comment text
+        comment_lines = ["Similar past tickets identified:"]
+        for r in results:
+            comment_lines.append(
+                f"- {r['ticket_id']} (Dev: {r['developer']}, Similarity: {r['similarity']:.2f})"
+            )
+        comment_body = "\n".join(comment_lines)
+
+        # Post comment to Jira
+        url = f"{JIRA_BASE_URL}/rest/api/2/issue/{crt}/comment"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {BEARER_TOKEN}"
+        }
+        payload = {"body": comment_body}
+        r = requests.post(url, headers=headers, data=json.dumps(payload))
+
+        if r.status_code == 201:
+            print(f"Added comment to {crt}")
+        else:
+            print(f"Failed to add comment for {crt}: {r.status_code} {r.text}")
+
+    print("completed comment_similar_tickets")
+    return {}
+
+# ----------------------------
 # Build LangGraph
 # ----------------------------
 graph = StateGraph(State)
@@ -253,6 +290,7 @@ graph.add_node("fetch_sprint_developers", lambda s: {"developers": fetch_sprint_
 graph.add_node("fetch_history", lambda s: {"history": fetch_history(s)})
 graph.add_node("build_index", lambda s: {"index": build_index(s["history"])})
 graph.add_node("search_index", lambda s: {"search_results": search_index(s)})
+graph.add_node("comment_similar_tickets", lambda s: comment_similar_tickets(s))
 graph.add_node("llm_assign", lambda s: {"assignments": llm_assign(s)})
 graph.add_node("assign_jira_issue", lambda s: assign_jira_issue(s["assignments"]) or {})
 
@@ -261,7 +299,11 @@ graph.add_edge("fetch_open_issues", "fetch_sprint_developers")
 graph.add_edge("fetch_sprint_developers", "fetch_history")
 graph.add_edge("fetch_history", "build_index")
 graph.add_edge("build_index", "search_index")
-graph.add_edge("search_index", "llm_assign")
+graph.add_edge("search_index", "comment_similar_tickets")
+graph.add_edge("comment_similar_tickets", "llm_assign")
+
+'''graph.add_edge("search_index", "llm_assign")'''
+
 graph.add_edge("llm_assign", "assign_jira_issue")
 graph.add_edge("assign_jira_issue", END)
 
