@@ -4,6 +4,6 @@ langchain-core
 langchain-community
 python-dotenv
 langchain-openai
-faiss
+faiss-cpu
 sentence-transformers
-
+streamlit
