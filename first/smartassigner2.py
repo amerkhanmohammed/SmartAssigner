@@ -8,10 +8,8 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from typing import TypedDict
-from IPython.display import Image, display
 from sentence_transformers import SentenceTransformer
 import faiss
-import numpy as np
 
 # ----------------------------
 # Load env
